@@ -36,12 +36,10 @@ class PatientMappingsView(generics.ListAPIView):
         if patient.creator != self.request.user:
             raise PermissionDenied("You do not have permission to view doctors for this patient.")
 
-        # Get doctor IDs mapped to this patient
         doctor_ids = PatientDoctorMapping.objects.filter(
             patient=patient
         ).values_list('doctor_id', flat=True)
 
-        # Return the actual Doctor objects
         return Doctors.objects.filter(id__in=doctor_ids)
 
 

@@ -1,40 +1,58 @@
-# mappings/views.py
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status, permissions
+from rest_framework import permissions
 from .models import PatientDoctorMapping
+from patients.models import Patients
 from .serializers import PatientDoctorMappingSerializer
+from doctors.serializers import DoctorSerializer
+from rest_framework.exceptions import PermissionDenied
+from doctors.models import Doctors
 
-class MappingListCreateView(APIView):
+from rest_framework import generics
+class MappingListCreateView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = PatientDoctorMappingSerializer
 
-    def get(self, request):
-        mappings = PatientDoctorMapping.objects.all()
-        serializer = PatientDoctorMappingSerializer(mappings, many=True)
-        return Response(serializer.data)
+    def get_queryset(self):
+        return PatientDoctorMapping.objects.all()
 
-    def post(self, request):
-        serializer = PatientDoctorMappingSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    def perform_create(self, serializer):
+        patient = serializer.validated_data['patient']
+        if patient.creator != self.request.user:
+            raise PermissionDenied("You do not have permission to assign doctors to this patient.")
+        serializer.save()
 
-class PatientMappingsAndDeleteView(APIView):
+
+class PatientMappingsView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = DoctorSerializer
 
-    def get(self, request, id):
-        mappings = PatientDoctorMapping.objects.filter(patient_id=id)
-        serializer = PatientDoctorMappingSerializer(mappings, many=True)
-        return Response(serializer.data)
-    def delete(self, request, id):
+    def get_queryset(self):
+        patient_id = self.kwargs['patient_id']
+
         try:
-            mapping = PatientDoctorMapping.objects.get(id=id)
-        except PatientDoctorMapping.DoesNotExist:
-            return Response({"detail": "Mapping not found."}, status=status.HTTP_404_NOT_FOUND)
+            patient = Patients.objects.get(id=patient_id)
+        except Patients.DoesNotExist:
+            return Doctors.objects.none()
 
-        mapping.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        if patient.creator != self.request.user:
+            raise PermissionDenied("You do not have permission to view doctors for this patient.")
+
+        # Get doctor IDs mapped to this patient
+        doctor_ids = PatientDoctorMapping.objects.filter(
+            patient=patient
+        ).values_list('doctor_id', flat=True)
+
+        # Return the actual Doctor objects
+        return Doctors.objects.filter(id__in=doctor_ids)
 
 
+class MappingDeleteView(generics.DestroyAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    queryset = PatientDoctorMapping.objects.all()
+    lookup_field = 'id'
+
+    def delete(self, request, *args, **kwargs):
+        mapping = self.get_object()
+        if mapping.patient.creator != request.user:
+            raise PermissionDenied("You do not have permission to delete this mapping.")
+        return super().delete(request, *args, **kwargs)
 
